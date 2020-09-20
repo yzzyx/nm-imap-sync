@@ -1,0 +1,17 @@
+*.swp
+*.swo
+
+# Cache and coverage reports
+.coverage
+.coverage.*
+.cache
+
+# IntelliJ IDEA files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# nm-imap-sync files
+nm-imap-sync
+config.yml
