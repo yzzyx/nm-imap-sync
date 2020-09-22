@@ -133,7 +133,9 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 	}
 
 	// Download whole body
-	section := &imap.BodySectionName{}
+	section := &imap.BodySectionName{
+		Peek: true, // Do not update seen-flags
+	}
 	items := []imap.FetchItem{section.FetchItem(), imap.FetchFlags}
 	seqSet := new(imap.SeqSet)
 	seqSet.AddNum(uid)
