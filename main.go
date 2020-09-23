@@ -102,8 +102,6 @@ func parsePathSetting(inPath string) string {
 }
 
 func main() {
-
-	var db *notmuch.DB
 	configPath := filepath.Join(userHomeDir(), ".config", "mr")
 
 	//dryRun := flag.Bool("dry-run", false, "Do not download any mail, only show which actions would be performed")
@@ -133,77 +131,16 @@ func main() {
 		panic(err)
 	}
 
-	//if *dryRun {
-	//	mode = notmuch.DBReadOnly
-	//}
-	db, err = notmuch.Open(maildirPath, notmuch.DBReadWrite)
-	if err != nil && errors.Is(err, notmuch.ErrFileError) {
-		fmt.Println("Creating database...")
-		db, err = notmuch.Create(maildirPath)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not open database: %v\n", err)
-		return
-	}
-
-	defer db.Close()
-
-	if db.NeedsUpgrade() {
-		fmt.Println("Database needs upgrade")
-		err = db.Upgrade()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Could not upgrade database: %v\n", err)
-			return
-		}
-	}
-
-	//ts := time.Time{}
-	//lastIndexedPath := filepath.Join(configPath, "lastindexed")
-	//data, err := ioutil.ReadFile(lastIndexedPath)
-	//if err == nil {
-	//	err = json.Unmarshal(data, &ts)
-	//	if err != nil {
-	//		fmt.Println("Cannot unmarshal last index date:", err)
-	//		return
-	//	}
-	//}
-
-	//now := time.Now()
-
-	// FIXME - Wrap this in a command
-	// Reindex all files
-	//fmt.Println("Indexing mailfiles...")
-	//err = indexAllFiles(db, ts, maildirPath)
-	//if err != nil {
-	//	fmt.Println("Could not index maildir:", err)
-	//	return
-	//}
-
-	//data, err = json.Marshal(now)
-	//if err == nil {
-	//	err = ioutil.WriteFile(lastIndexedPath, data, 0600)
-	//	if err != nil {
-	//		fmt.Println("Could not update last indexed timestamp:", err)
-	//		return
-	//	}
-	//}
-
-	//if h.cfg.IndexedMailDir == false {
-	//	err = indexAllFiles(db, time.Time{}, h.maildirPath)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//}
-
 	// Create a IMAP setup for each mailbox
 	for name, mailbox := range cfg.Mailboxes {
+		mailbox.DBPath = maildirPath
 		folderPath := filepath.Join(maildirPath, name)
 		err = os.MkdirAll(folderPath, 0700)
 		if err != nil {
 			panic(err)
 		}
 
-		h, err := imap.New(db, folderPath, mailbox)
+		h, err := imap.New(folderPath, mailbox)
 		if err != nil {
 			log.Fatal(err)
 		}

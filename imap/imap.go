@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yzzyx/nm-imap-sync/nm"
 	"io"
 	"io/ioutil"
 	"math"
@@ -36,6 +37,8 @@ type Mailbox struct {
 	}
 
 	FolderTags map[string]string `yaml:"folder_tags"`
+
+	DBPath string // This is usually inherited from the base configuration
 }
 
 type mailConfig struct {
@@ -53,7 +56,7 @@ type IndexUpdate struct {
 // Handler is responsible for reading from mailboxes and updating the notmuch index
 // Note that a single handler can only read from one mailbox
 type Handler struct {
-	db          *notmuch.DB
+	db          *nm.DB
 	maildirPath string
 	mailbox     Mailbox
 
@@ -65,11 +68,8 @@ type Handler struct {
 	hostname   string
 }
 
-// New creates a new Handler
-func New(db *notmuch.DB,
-	maildirPath string,
-	mailbox Mailbox) (*Handler, error) {
-
+// New creates a new Handler for processing IMAP mailboxes
+func New(maildirPath string, mailbox Mailbox) (*Handler, error) {
 	var err error
 	h := Handler{}
 	h.hostname, err = os.Hostname()
@@ -90,7 +90,11 @@ func New(db *notmuch.DB,
 	}()
 	h.seqNumChan = seqNumChan
 	h.processID = os.Getpid()
-	h.db = db
+	h.db, err = nm.New(mailbox.DBPath)
+	if err != nil {
+		return nil, err
+	}
+
 	h.maildirPath = maildirPath
 
 	h.cfg.LastSeenUID = make(map[string]uint32)
@@ -201,16 +205,6 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 		return err
 	}
 
-	// Add file to index
-	m, err := h.db.AddMessage(newPath)
-	if err != nil {
-		if errors.Is(err, notmuch.ErrDuplicateMessageID) {
-			// We've already seen this one
-			return nil
-		}
-		return err
-	}
-	defer m.Close()
 
 	seen := false
 	answered := false
@@ -228,62 +222,63 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 		}
 	}
 
-	if !seen {
-		err = m.AddTag("unread")
+	err = h.db.WrapRW(func (db *notmuch.DB) error {
+		// Add file to index
+		m, err := db.AddMessage(newPath)
 		if err != nil {
-			return err
-		}
-	}
-
-	if answered {
-		err = m.AddTag("replied")
-		if err != nil {
-			return err
-		}
-	}
-
-	if deleted {
-		err = m.AddTag("deleted")
-		if err != nil {
-			return err
-		}
-	}
-
-	// Add all messages to inbox
-	err = m.AddTag("inbox")
-	if err != nil {
-		return err
-	}
-
-	// Add additional tags specified in config file
-	if extraTags, ok := h.mailbox.FolderTags[mailbox]; ok {
-		for _, tag := range strings.Split(extraTags, ",") {
-			tag = strings.TrimSpace(tag)
-			if strings.HasPrefix(tag, "-") {
-				err = m.RemoveTag(tag[1:])
-			} else {
-				err = m.AddTag(tag)
+			if errors.Is(err, notmuch.ErrDuplicateMessageID) {
+				// We've already seen this one
+				return nil
 			}
+			return err
+		}
+		defer m.Close()
 
+		if !seen {
+			err = m.AddTag("unread")
 			if err != nil {
 				return err
 			}
 		}
-	}
 
-	tags := m.Tags()
-	tagnames := []string{}
-	var tag *notmuch.Tag
-	for tags.Next(&tag) {
-		tagnames = append(tagnames, tag.String())
-	}
+		if answered {
+			err = m.AddTag("replied")
+			if err != nil {
+				return err
+			}
+		}
 
-	err = tags.Close()
-	if err != nil {
-		return err
-	}
+		if deleted {
+			err = m.AddTag("deleted")
+			if err != nil {
+				return err
+			}
+		}
 
-	return nil
+		// Add all messages to inbox
+		err = m.AddTag("inbox")
+		if err != nil {
+			return err
+		}
+
+		// Add additional tags specified in config file
+		if extraTags, ok := h.mailbox.FolderTags[mailbox]; ok {
+			for _, tag := range strings.Split(extraTags, ",") {
+				tag = strings.TrimSpace(tag)
+				if strings.HasPrefix(tag, "-") {
+					err = m.RemoveTag(tag[1:])
+				} else {
+					err = m.AddTag(tag)
+				}
+
+				if err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	return err
 }
 
 // GetLastFetched returns the timestamp when we last checked this mailbox
@@ -311,15 +306,21 @@ func (h *Handler) seenMessage(messageID string) (bool, error) {
 		return false, nil
 	}
 
-	msg, err := h.db.FindMessage(messageID)
-	if err == nil {
-		msg.Close()
-		return true, nil
-	}
-	if err != notmuch.ErrNotFound {
-		return false, err
-	}
-	return false, nil
+	retval := false
+	err := h.db.Wrap(func(db *notmuch.DB) error {
+		msg, err := db.FindMessage(messageID)
+		if err == nil {
+			msg.Close()
+			retval = true
+			return nil
+		}
+		if err != notmuch.ErrNotFound {
+			return err
+		}
+		return nil
+	})
+
+	return retval, err
 }
 
 func (h *Handler) mailboxFetchMessages(c *client.Client, mailbox string) error {
@@ -375,7 +376,7 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, mailbox string) error {
 			fmt.Println("Already seen", msg.Uid, msg.Envelope.MessageId)
 			continue
 		}
-		fmt.Println("Adding to list", msg.Uid, msg.Envelope.MessageId)
+		//fmt.Println("Adding to list", msg.Uid, msg.Envelope.MessageId)
 		uidList = append(uidList, msg.Uid)
 	}
 
