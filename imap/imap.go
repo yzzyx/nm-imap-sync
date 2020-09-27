@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/yzzyx/nm-imap-sync/nm"
 	"io"
 	"io/ioutil"
 	"math"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/yzzyx/nm-imap-sync/sync"
 	notmuch "github.com/zenhack/go.notmuch"
 )
 
@@ -56,7 +56,6 @@ type IndexUpdate struct {
 // Handler is responsible for reading from mailboxes and updating the notmuch index
 // Note that a single handler can only read from one mailbox
 type Handler struct {
-	db          *nm.DB
 	maildirPath string
 	mailbox     Mailbox
 
@@ -90,11 +89,6 @@ func New(maildirPath string, mailbox Mailbox) (*Handler, error) {
 	}()
 	h.seqNumChan = seqNumChan
 	h.processID = os.Getpid()
-	h.db, err = nm.New(mailbox.DBPath)
-	if err != nil {
-		return nil, err
-	}
-
 	h.maildirPath = maildirPath
 
 	h.cfg.LastSeenUID = make(map[string]uint32)
@@ -129,7 +123,7 @@ func (h *Handler) Close() error {
 }
 
 // getMessage downloads a message from the server from a mailbox, and stores it in a maildir
-func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error {
+func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, uid uint32) error {
 	// Select INBOX
 	_, err := c.Select(mailbox, false)
 	if err != nil {
@@ -205,10 +199,16 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 		return err
 	}
 
-
+	/*
+		notmuch flag translations
+		'D'     Adds the "draft" tag to the message
+		'F'     Adds the "flagged" tag to the message
+		'P'     Adds the "passed" tag to the message
+		'R'     Adds the "replied" tag to the message
+		'S'     Removes the "unread" tag from the message
+	*/
 	seen := false
-	answered := false
-	deleted := false
+	imapFlags := []string{}
 
 	// Add flags from imap
 	for _, flag := range msg.Flags {
@@ -216,13 +216,22 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 		case imap.SeenFlag:
 			seen = true
 		case imap.AnsweredFlag:
-			answered = true
+			imapFlags = append(imapFlags, "replied")
 		case imap.DeletedFlag:
-			deleted = true
+			imapFlags = append(imapFlags, "deleted")
+		case imap.DraftFlag:
+			imapFlags = append(imapFlags, "draft")
+		case imap.FlaggedFlag:
+			imapFlags = append(imapFlags, "flagged")
 		}
 	}
 
-	err = h.db.WrapRW(func (db *notmuch.DB) error {
+	if !seen {
+		imapFlags = append(imapFlags, "unread")
+	}
+
+	var messageID string
+	err = syncdb.WrapRW(func(db *notmuch.DB) error {
 		// Add file to index
 		m, err := db.AddMessage(newPath)
 		if err != nil {
@@ -234,22 +243,12 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 		}
 		defer m.Close()
 
-		if !seen {
-			err = m.AddTag("unread")
-			if err != nil {
-				return err
-			}
-		}
+		// Read the message id from notmuch, since it's possible
+		// we had to generate one
+		messageID = m.ID()
 
-		if answered {
-			err = m.AddTag("replied")
-			if err != nil {
-				return err
-			}
-		}
-
-		if deleted {
-			err = m.AddTag("deleted")
+		for _, f := range imapFlags {
+			err = m.AddTag(f)
 			if err != nil {
 				return err
 			}
@@ -278,6 +277,14 @@ func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error
 		}
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+	// The flags in `imapFlags` already exist on the server,
+	// so we add these to our sync-db. Any additional flags will then
+	// be synchronized to the IMAP server on the next run
+	err = syncdb.AddMessageSyncInfo(messageID, imapFlags)
 	return err
 }
 
@@ -294,7 +301,7 @@ func (h *Handler) setLastSeenUID(mailbox string, uid uint32) {
 }
 
 // seenMessage returns true if we've already seen this message
-func (h *Handler) seenMessage(messageID string) (bool, error) {
+func (h *Handler) seenMessage(nmdb *sync.DB, messageID string) (bool, error) {
 	// Remove surrounding tags
 	if (strings.HasPrefix(messageID, "<") && strings.HasSuffix(messageID, ">")) ||
 		(strings.HasPrefix(messageID, "\"") && strings.HasSuffix(messageID, "\"")) {
@@ -307,7 +314,7 @@ func (h *Handler) seenMessage(messageID string) (bool, error) {
 	}
 
 	retval := false
-	err := h.db.Wrap(func(db *notmuch.DB) error {
+	err := nmdb.Wrap(func(db *notmuch.DB) error {
 		msg, err := db.FindMessage(messageID)
 		if err == nil {
 			msg.Close()
@@ -323,7 +330,7 @@ func (h *Handler) seenMessage(messageID string) (bool, error) {
 	return retval, err
 }
 
-func (h *Handler) mailboxFetchMessages(c *client.Client, mailbox string) error {
+func (h *Handler) mailboxFetchMessages(c *client.Client, syncdb *sync.DB, mailbox string) error {
 	mbox, err := c.Select(mailbox, false)
 	if err != nil {
 		return err
@@ -367,7 +374,7 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, mailbox string) error {
 			lastSeenUID = msg.Uid
 		}
 
-		seen, err := h.seenMessage(msg.Envelope.MessageId)
+		seen, err := h.seenMessage(syncdb, msg.Envelope.MessageId)
 		if err != nil {
 			return err
 		}
@@ -390,7 +397,7 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, mailbox string) error {
 	for idx, uid := range uidList {
 		percent := (float32(idx) / float32(len(uidList))) * 100
 		fmt.Printf("\r%s %d/%d %.2f%%", mailbox, idx, len(uidList), percent)
-		err = h.getMessage(c, mailbox, uid)
+		err = h.getMessage(c, syncdb, mailbox, uid)
 		if err != nil {
 			return err
 		}
@@ -467,7 +474,7 @@ func (h *Handler) listFolders(c *client.Client) ([]string, error) {
 }
 
 // CheckMessages checks for new/unindexed messages on the server
-func (h *Handler) CheckMessages() error {
+func (h *Handler) CheckMessages(syncdb *sync.DB) error {
 	var c *client.Client
 	var err error
 
@@ -500,13 +507,12 @@ func (h *Handler) CheckMessages() error {
 	if err != nil {
 		return err
 	}
-
 	// Don't forget to logout
 	defer c.Logout()
 
 	// Start a TLS session
 	if h.mailbox.UseStartTLS {
-		if err := c.StartTLS(tlsConfig); err != nil {
+		if err = c.StartTLS(tlsConfig); err != nil {
 			return err
 		}
 	}
@@ -517,8 +523,12 @@ func (h *Handler) CheckMessages() error {
 	}
 
 	mailboxes, err := h.listFolders(c)
+	if err != nil {
+		return err
+	}
+
 	for _, mb := range mailboxes {
-		err = h.mailboxFetchMessages(c, mb)
+		err = h.mailboxFetchMessages(c, syncdb, mb)
 		if err != nil {
 			return err
 		}
