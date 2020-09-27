@@ -7,49 +7,53 @@ import (
 )
 
 // Wrap creates a readonly database connection, and executes the 'fn' function with this connection
-func (s *DB) Wrap(fn func(db *notmuch.DB) error) error {
-	return s.wrap(notmuch.DBReadOnly, fn)
+func (db *DB) Wrap(fn func(db *notmuch.DB) error) error {
+	return db.wrap(notmuch.DBReadOnly, fn)
 }
 
 // WrapRW creates a readwrite-connection and exectues the 'fn' function with this connection
-func (s *DB) WrapRW(fn func(db *notmuch.DB) error) error {
-	return s.wrap(notmuch.DBReadWrite, fn)
+func (db *DB) WrapRW(fn func(db *notmuch.DB) error) error {
+	return db.wrap(notmuch.DBReadWrite, fn)
 }
 
-func (s *DB) wrap(mode notmuch.DBMode, fn func(*notmuch.DB) error) error {
-	if mode == notmuch.DBReadWrite && s.db != nil {
-		err := s.db.Close()
+func (db *DB) wrap(mode notmuch.DBMode, fn func(*notmuch.DB) error) error {
+	if mode == notmuch.DBReadWrite && db.nmdb != nil {
+		err := db.nmdb.Close()
 		if err != nil {
 			return err
 		}
 	}
 
-	db, err := notmuch.Open(s.dbpath, mode)
+	nmdb, err := notmuch.Open(db.dbpath, mode)
 	if err != nil && errors.Is(err, notmuch.ErrFileError) {
-		db, err = notmuch.Create(s.dbpath)
+		nmdb, err = notmuch.Create(db.dbpath)
+	}
+
+	if err != nil {
+		return err
 	}
 
 	if mode == notmuch.DBReadWrite {
-		defer db.Close()
+		defer nmdb.Close()
 	}
-	err = fn(db)
+	err = fn(nmdb)
 	return err
 }
 
 // createOrUpgrade opens the database located at 'p' and upgrades it if necessary,
 // or creates it if it doesn't exist yet.
-func (s *DB) createOrUpgrade() error {
-	db, err := notmuch.Open(s.dbpath, notmuch.DBReadWrite)
+func (db *DB) createOrUpgrade() error {
+	nmdb, err := notmuch.Open(db.dbpath, notmuch.DBReadWrite)
 	if err != nil && errors.Is(err, notmuch.ErrFileError) {
-		db, err = notmuch.Create(s.dbpath)
+		nmdb, err = notmuch.Create(db.dbpath)
 	}
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer nmdb.Close()
 
-	if db.NeedsUpgrade() {
-		err = db.Upgrade()
+	if nmdb.NeedsUpgrade() {
+		err = nmdb.Upgrade()
 		if err != nil {
 			return err
 		}
