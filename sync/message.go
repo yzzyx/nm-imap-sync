@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 )
 
@@ -42,6 +43,11 @@ func (db *DB) AddMessageSyncInfo(messageid string, tags []string) error {
 	query := `INSERT INTO messages(messageid, tags) VALUES(?, ?)
   ON CONFLICT(messageid) DO UPDATE SET tags=?;`
 
-	_, err := db.db.Exec(query, messageid, tags, tags)
-	return err
+	tagStr := strings.Join(tags, ",")
+	_, err := db.db.Exec(query, messageid, tagStr, tagStr)
+	if err != nil {
+		return fmt.Errorf("cannot exec query %s: %w", query, err)
+
+	}
+	return nil
 }
