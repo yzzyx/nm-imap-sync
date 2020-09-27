@@ -1,43 +1,37 @@
-package nm
+package sync
 
 import (
 	"errors"
+
 	notmuch "github.com/zenhack/go.notmuch"
 )
 
-// DB defines a notmuch wrapper
-type DB struct {
-	dbpath string
-}
-
-// New creates a new DB instance, and creates or upgrades the database if necessary
-func New(dbpath string) (*DB, error) {
-	s := &DB{
-		dbpath: dbpath,
-	}
-	err := s.createOrUpgrade()
-	if err != nil {
-		return nil, err
-	}
-	return s, nil
-}
-
 // Wrap creates a readonly database connection, and executes the 'fn' function with this connection
-func (s *DB) Wrap(fn func (db *notmuch.DB) error) error {
+func (s *DB) Wrap(fn func(db *notmuch.DB) error) error {
 	return s.wrap(notmuch.DBReadOnly, fn)
 }
 
 // WrapRW creates a readwrite-connection and exectues the 'fn' function with this connection
-func (s *DB) WrapRW(fn func (db *notmuch.DB) error) error {
+func (s *DB) WrapRW(fn func(db *notmuch.DB) error) error {
 	return s.wrap(notmuch.DBReadWrite, fn)
 }
 
-func (s *DB) wrap(mode int, fn func (*notmuch.DB) error) error {
-	db, err := notmuch.Open(s.dbpath, notmuch.DBReadWrite)
+func (s *DB) wrap(mode notmuch.DBMode, fn func(*notmuch.DB) error) error {
+	if mode == notmuch.DBReadWrite && s.db != nil {
+		err := s.db.Close()
+		if err != nil {
+			return err
+		}
+	}
+
+	db, err := notmuch.Open(s.dbpath, mode)
 	if err != nil && errors.Is(err, notmuch.ErrFileError) {
 		db, err = notmuch.Create(s.dbpath)
 	}
-	defer db.Close()
+
+	if mode == notmuch.DBReadWrite {
+		defer db.Close()
+	}
 	err = fn(db)
 	return err
 }
