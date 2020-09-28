@@ -154,7 +154,7 @@ func main() {
 		imapQueue := make(chan sync.Update, 10000)
 
 		go func() {
-			err = syncdb.CheckFolders(ctx, folderPath, imapQueue)
+			err = syncdb.CheckFolders(ctx, mailbox, folderPath, imapQueue)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -163,7 +163,7 @@ func main() {
 
 		for x := range imapQueue {
 			fmt.Printf("%s\n", x.MessageID)
-			fmt.Printf(" Folder: %s\n", x.Folder)
+			fmt.Printf(" Folder: %s\n", x.FolderName)
 			fmt.Printf(" Tags: add %v, remove %v\n", x.AddedTags, x.RemovedTags)
 		}
 
