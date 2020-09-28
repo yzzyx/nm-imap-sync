@@ -108,7 +108,7 @@ func (h *Handler) Close() error {
 // getMessage downloads a message from the server from a mailbox, and stores it in a maildir
 func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, uid uint32) error {
 	// Select INBOX
-	_, err := c.Select(mailbox, false)
+	mailboxInfo, err := c.Select(mailbox, false)
 	if err != nil {
 		return err
 	}
@@ -267,7 +267,12 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 	// The flags in `imapFlags` already exist on the server,
 	// so we add these to our sync-db. Any additional flags will then
 	// be synchronized to the IMAP server on the next run
-	err = syncdb.AddMessageSyncInfo(messageID, imapFlags)
+	err = syncdb.AddMessageSyncInfo(sync.MessageInfo{
+		MessageID:   messageID,
+		FolderName:  mailboxInfo.Name,
+		UIDValidity: int(mailboxInfo.UidValidity),
+		UID:         int(uid),
+	}, imapFlags)
 	return err
 }
 

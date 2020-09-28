@@ -7,14 +7,36 @@ import (
 	"strings"
 )
 
-func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []string) (added []string, removed []string, created bool, err error) {
+// MessageInfo is used to identify a message
+type MessageInfo struct {
+	MessageID string
+
+	// The following fields are used to identify the message on the IMAP server
+	// Unfortunately, there's no good way to uniquely identify a message,
+	// and even though all our messages in notmuch will have a message-id,
+	// that id can have been generated locally.
+	FolderName  string
+	UIDValidity int
+	UID         int
+
+	AddedTags   []string
+	RemovedTags []string
+	Created     bool
+}
+
+func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []string) (info MessageInfo, err error) {
 	var tags string
-	err = db.db.QueryRowContext(ctx, "SELECT tags FROM messages WHERE messageid = ?", messageid).Scan(&tags)
+	info.MessageID = messageid
+
+	err = db.db.QueryRowContext(ctx, "SELECT tags, foldername, uidvalidity, uid FROM messages WHERE messageid = ?", messageid).
+		Scan(&tags, &info.FolderName, &info.UIDValidity, &info.UID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return currentTags, nil, true, nil
+			info.Created = true
+			info.AddedTags = currentTags
+			return info, nil
 		}
-		return nil, nil, false, err
+		return info, err
 	}
 
 	dbMap := map[string]struct{}{}
@@ -28,26 +50,25 @@ func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []str
 			delete(dbMap, t)
 			continue
 		}
-		added = append(added, t)
+		info.AddedTags = append(info.AddedTags, t)
 	}
 
 	for t := range dbMap {
-		removed = append(removed, t)
+		info.RemovedTags = append(info.RemovedTags, t)
 	}
 
-	return added, removed, false, nil
+	return info, nil
 }
 
 // AddMessageInfo updates the list of synchronized tags for a message
-func (db *DB) AddMessageSyncInfo(messageid string, tags []string) error {
-	query := `INSERT INTO messages(messageid, tags) VALUES(?, ?)
+func (db *DB) AddMessageSyncInfo(info MessageInfo, tags []string) error {
+	query := `INSERT INTO messages(messageid, tags, foldername, uidvalidity, uid) VALUES(?, ?, ?, ?, ?)
   ON CONFLICT(messageid) DO UPDATE SET tags=?;`
 
 	tagStr := strings.Join(tags, ",")
-	_, err := db.db.Exec(query, messageid, tagStr, tagStr)
+	_, err := db.db.Exec(query, info.MessageID, tagStr, info.FolderName, info.UIDValidity, info.UID, tagStr)
 	if err != nil {
 		return fmt.Errorf("cannot exec query %s: %w", query, err)
-
 	}
 	return nil
 }

@@ -112,20 +112,16 @@ func (db *DB) checkMailbox(ctx context.Context, mailboxPath string, folderName s
 				return err
 			}
 
-			added, removed, create, err := db.CheckTags(ctx, messageID, taglist)
+			info, err := db.CheckTags(ctx, messageID, taglist)
 			if err != nil {
 				return err
 			}
 
 			// queue update to imap server
-			if len(added) > 0 || len(removed) > 0 || create {
+			if len(info.AddedTags) > 0 || len(info.RemovedTags) > 0 || info.Created {
 				imapQueue <- Update{
-					MessageID:   messageID,
+					MessageInfo: info,
 					Filename:    messagePath,
-					AddedTags:   added,
-					RemovedTags: removed,
-					Created:     create,
-					Folder:      folderName,
 				}
 			}
 		}

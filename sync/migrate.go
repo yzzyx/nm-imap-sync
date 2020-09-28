@@ -8,7 +8,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	migrations := []string{
 		`CREATE TABLE IF NOT EXISTS 'messages' (
 messageid varchar(256) PRIMARY KEY,
-tags text
+tags text,
+foldername string,
+uidvalidity int,
+uid int
 );`,
 	}
 
