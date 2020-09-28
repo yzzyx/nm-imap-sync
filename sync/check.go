@@ -60,7 +60,7 @@ func (db *DB) CheckFolders(ctx context.Context, mailbox config.Mailbox, maildirP
 
 			err = db.checkMailbox(ctx, filepath.Join(maildirPath, name), name, imapQueue)
 			if err != nil {
-				return nil
+				return err
 			}
 		}
 	}
