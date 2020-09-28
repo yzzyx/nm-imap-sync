@@ -19,27 +19,10 @@ import (
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/yzzyx/nm-imap-sync/config"
 	"github.com/yzzyx/nm-imap-sync/sync"
 	notmuch "github.com/zenhack/go.notmuch"
 )
-
-// Mailbox defines the available options for a IMAP mailbox to pull from
-type Mailbox struct {
-	Server      string
-	Port        int
-	Username    string
-	Password    string
-	UseTLS      bool `yaml:"use_tls"`
-	UseStartTLS bool `yaml:"use_starttls"`
-	Folders     struct {
-		Include []string
-		Exclude []string
-	}
-
-	FolderTags map[string]string `yaml:"folder_tags"`
-
-	DBPath string // This is usually inherited from the base configuration
-}
 
 type mailConfig struct {
 	// Keep track of last seen UID for each mailbox
@@ -57,7 +40,7 @@ type IndexUpdate struct {
 // Note that a single handler can only read from one mailbox
 type Handler struct {
 	maildirPath string
-	mailbox     Mailbox
+	mailbox     config.Mailbox
 
 	cfg mailConfig
 
@@ -68,7 +51,7 @@ type Handler struct {
 }
 
 // New creates a new Handler for processing IMAP mailboxes
-func New(maildirPath string, mailbox Mailbox) (*Handler, error) {
+func New(maildirPath string, mailbox config.Mailbox) (*Handler, error) {
 	var err error
 	h := Handler{}
 	h.hostname, err = os.Hostname()

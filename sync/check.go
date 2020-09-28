@@ -7,12 +7,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/yzzyx/nm-imap-sync/config"
 	notmuch "github.com/zenhack/go.notmuch"
 )
 
 // CheckFolders iterates through all folders in maildirPath, and
 // compares the result with the existing database
-func (db *DB) CheckFolders(ctx context.Context, maildirPath string, imapQueue chan<- Update) error {
+func (db *DB) CheckFolders(ctx context.Context, mailbox config.Mailbox, maildirPath string, imapQueue chan<- Update) error {
 	md, err := os.Open(maildirPath)
 	if err != nil {
 		return err
@@ -34,6 +35,29 @@ func (db *DB) CheckFolders(ctx context.Context, maildirPath string, imapQueue ch
 				continue
 			}
 			name := e.Name()
+
+			// Check if folder is included in sync
+			var include bool
+			if len(mailbox.Folders.Include) > 0 {
+				for _, includeFolder := range mailbox.Folders.Include {
+					if name == includeFolder {
+						include = true
+						break
+					}
+				}
+			} else {
+				include = true
+				for _, includeFolder := range mailbox.Folders.Exclude {
+					if name == includeFolder {
+						include = false
+						break
+					}
+				}
+			}
+			if !include {
+				continue
+			}
+
 			err = db.checkMailbox(ctx, filepath.Join(maildirPath, name), name, imapQueue)
 			if err != nil {
 				return nil
