@@ -313,14 +313,6 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 			currentFlags[f] = v
 		}
 
-		// Add all messages to inbox, if they're not already flagged
-		if hasFlag := currentFlags["inbox"]; !hasFlag {
-			err = m.AddTag("inbox")
-			if err != nil {
-				return err
-			}
-		}
-
 		// Add additional tags specified in config file
 		if extraTags, ok := h.mailbox.FolderTags[mailbox]; ok {
 			for _, tag := range strings.Split(extraTags, ",") {
