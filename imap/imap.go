@@ -191,7 +191,7 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 		'S'     Removes the "unread" tag from the message
 	*/
 	seen := false
-	imapFlags := []string{}
+	imapFlags := map[string]bool{}
 
 	// Add flags from imap
 	for _, flag := range msg.Flags {
@@ -199,18 +199,26 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 		case imap.SeenFlag:
 			seen = true
 		case imap.AnsweredFlag:
-			imapFlags = append(imapFlags, "replied")
+			imapFlags["replied"] = true
 		case imap.DeletedFlag:
-			imapFlags = append(imapFlags, "deleted")
+			// NOTE - the deleted flag is special in IMAP
+			// usually, all deleted messages will be permanently removed from the server when we close the folder
+			imapFlags["deleted"] = true
 		case imap.DraftFlag:
-			imapFlags = append(imapFlags, "draft")
+			imapFlags["draft"] = true
 		case imap.FlaggedFlag:
-			imapFlags = append(imapFlags, "flagged")
+			imapFlags["flagged"] = true
+		default:
+			// We ignore other builtin flags
+			if flag[0] == '\\' {
+				continue
+			}
+			imapFlags[flag] = true
 		}
 	}
 
 	if !seen {
-		imapFlags = append(imapFlags, "unread")
+		imapFlags["unread"] = true
 	}
 
 	var messageID string
@@ -230,17 +238,27 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 		// we had to generate one
 		messageID = m.ID()
 
-		for _, f := range imapFlags {
+		for f := range imapFlags {
 			err = m.AddTag(f)
 			if err != nil {
 				return err
 			}
 		}
 
-		// Add all messages to inbox
-		err = m.AddTag("inbox")
-		if err != nil {
-			return err
+		// Make a copy of our current flag-set,
+		// since we need to store the current state in our sync database,
+		// but still want to keep track of duplicates
+		currentFlags := make(map[string]bool, len(imapFlags))
+		for f, v := range imapFlags {
+			currentFlags[f] = v
+		}
+
+		// Add all messages to inbox, if they're not already flagged
+		if hasFlag := currentFlags["inbox"]; !hasFlag {
+			err = m.AddTag("inbox")
+			if err != nil {
+				return err
+			}
 		}
 
 		// Add additional tags specified in config file
@@ -248,9 +266,17 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 			for _, tag := range strings.Split(extraTags, ",") {
 				tag = strings.TrimSpace(tag)
 				if strings.HasPrefix(tag, "-") {
-					err = m.RemoveTag(tag[1:])
+					// Only remove tag if we have it
+					tag := tag[1:]
+					if hasFlag := currentFlags[tag]; hasFlag {
+						err = m.RemoveTag(tag)
+						delete(currentFlags, tag)
+					}
 				} else {
-					err = m.AddTag(tag)
+					if hasFlag := currentFlags[tag]; !hasFlag {
+						err = m.AddTag(tag)
+						currentFlags[tag] = true
+					}
 				}
 
 				if err != nil {
@@ -264,6 +290,11 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 	if err != nil {
 		return err
 	}
+
+	flagSlice := make([]string, 0, len(imapFlags))
+	for f := range imapFlags {
+		flagSlice = append(flagSlice, f)
+	}
 	// The flags in `imapFlags` already exist on the server,
 	// so we add these to our sync-db. Any additional flags will then
 	// be synchronized to the IMAP server on the next run
@@ -272,7 +303,7 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 		FolderName:  mailboxInfo.Name,
 		UIDValidity: int(mailboxInfo.UidValidity),
 		UID:         int(uid),
-	}, imapFlags)
+	}, flagSlice)
 	return err
 }
 
