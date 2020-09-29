@@ -25,23 +25,54 @@ type MessageInfo struct {
 	Created     bool     // If set to true, we haven't got this message in the database yet
 }
 
-func (db *DB) CheckTags(ctx context.Context, folderName string, messageid string, currentTags []string) (info MessageInfo, err error) {
+// CheckTagsUID fetches tags for a messages based on UID and compares them to the list of wanted tags
+func (db *DB) CheckTagsUID(ctx context.Context, folderName string, uidValidity int, uid int, wantedTags []string) (info MessageInfo, err error) {
+	var tags string
+	query := "SELECT tags, messageid FROM messages WHERE folderName = ? AND uidvalidity = ? AND uid = ?"
+
+	info.FolderName = folderName
+	info.UIDValidity = uidValidity
+	info.UID = uid
+	info.WantedTags = wantedTags
+
+	err = db.db.QueryRowContext(ctx, query, folderName, uidValidity, uid).
+		Scan(&tags, &info.FolderName, &info.MessageID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			info.Created = true
+			info.AddedTags = wantedTags
+			return info, nil
+		}
+		return info, err
+	}
+
+	db.compareTags(&info, tags, wantedTags)
+	return info, nil
+}
+
+// CheckTags fetches tags for a message based on MessageID, and compares those tags to list the of wanted tags
+func (db *DB) CheckTags(ctx context.Context, folderName string, messageid string, wantedTags []string) (info MessageInfo, err error) {
 	var tags string
 	info.FolderName = folderName
 	info.MessageID = messageid
-	info.WantedTags = currentTags
+	info.WantedTags = wantedTags
 
 	err = db.db.QueryRowContext(ctx, "SELECT tags, foldername, uidvalidity, uid FROM messages WHERE messageid = ?", messageid).
 		Scan(&tags, &info.FolderName, &info.UIDValidity, &info.UID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			info.Created = true
-			info.AddedTags = currentTags
+			info.AddedTags = wantedTags
 			return info, nil
 		}
 		return info, err
 	}
 
+	db.compareTags(&info, tags, wantedTags)
+	return info, nil
+}
+
+func (db *DB) compareTags(info *MessageInfo, tags string, wantedTags []string) {
 	dbMap := map[string]struct{}{}
 	dbTags := strings.Split(tags, ",")
 	for _, t := range dbTags {
@@ -52,7 +83,7 @@ func (db *DB) CheckTags(ctx context.Context, folderName string, messageid string
 		dbMap[t] = struct{}{}
 	}
 
-	for _, t := range currentTags {
+	for _, t := range wantedTags {
 		t = strings.TrimSpace(t)
 		if t == "" {
 			continue
@@ -71,8 +102,6 @@ func (db *DB) CheckTags(ctx context.Context, folderName string, messageid string
 		}
 		info.RemovedTags = append(info.RemovedTags, t)
 	}
-
-	return info, nil
 }
 
 // AddMessageInfo updates the list of synchronized tags for a message
