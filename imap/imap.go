@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/schollz/progressbar/v3"
 	"io"
 	"io/ioutil"
 	"math"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/schollz/progressbar/v3"
 	"github.com/yzzyx/nm-imap-sync/config"
 	"github.com/yzzyx/nm-imap-sync/sync"
 	notmuch "github.com/zenhack/go.notmuch"
@@ -43,7 +43,8 @@ type Handler struct {
 	maildirPath string
 	mailbox     config.Mailbox
 
-	cfg mailConfig
+	cfg    mailConfig
+	client *client.Client
 
 	// Used internally to generate maildir files
 	seqNumChan <-chan int
@@ -61,6 +62,48 @@ func New(maildirPath string, mailbox config.Mailbox) (*Handler, error) {
 	}
 
 	h.mailbox = mailbox
+
+	if h.mailbox.Server == "" {
+		return nil, errors.New("imap server address not configured")
+	}
+	if h.mailbox.Username == "" {
+		return nil, errors.New("imap username not configured")
+	}
+	if h.mailbox.Password == "" {
+		return nil, errors.New("imap password not configured")
+	}
+
+	// Set default port
+	if h.mailbox.Port == 0 {
+		h.mailbox.Port = 143
+		if h.mailbox.UseTLS {
+			h.mailbox.Port = 993
+		}
+	}
+
+	connectionString := fmt.Sprintf("%s:%d", h.mailbox.Server, h.mailbox.Port)
+	tlsConfig := &tls.Config{ServerName: h.mailbox.Server}
+	if h.mailbox.UseTLS {
+		h.client, err = client.DialTLS(connectionString, tlsConfig)
+	} else {
+		h.client, err = client.Dial(connectionString)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Start a TLS session
+	if h.mailbox.UseStartTLS {
+		if err = h.client.StartTLS(tlsConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	err = h.client.Login(h.mailbox.Username, h.mailbox.Password)
+	if err != nil {
+		return nil, err
+	}
 
 	// Generate unique sequence numbers
 	seqNumChan := make(chan int)
@@ -103,13 +146,19 @@ func (h *Handler) Close() error {
 		return err
 	}
 
-	return nil
+	err = h.client.Close()
+	if err != nil {
+		return err
+	}
+
+	err = h.client.Logout()
+	return err
 }
 
 // getMessage downloads a message from the server from a mailbox, and stores it in a maildir
-func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, uid uint32) error {
+func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error {
 	// Select INBOX
-	mailboxInfo, err := c.Select(mailbox, false)
+	mailboxInfo, err := h.client.Select(mailbox, false)
 	if err != nil {
 		return err
 	}
@@ -125,7 +174,7 @@ func (h *Handler) getMessage(c *client.Client, syncdb *sync.DB, mailbox string, 
 	messages := make(chan *imap.Message)
 	done := make(chan error)
 	go func() {
-		done <- c.UidFetch(seqSet, items, messages)
+		done <- h.client.UidFetch(seqSet, items, messages)
 	}()
 
 	msg := <-messages
@@ -350,8 +399,8 @@ func (h *Handler) seenMessage(nmdb *sync.DB, messageID string) (bool, error) {
 	return retval, err
 }
 
-func (h *Handler) mailboxFetchMessages(c *client.Client, syncdb *sync.DB, mailbox string) error {
-	mbox, err := c.Select(mailbox, false)
+func (h *Handler) mailboxFetchMessages(syncdb *sync.DB, mailbox string) error {
+	mbox, err := h.client.Select(mailbox, false)
 	if err != nil {
 		return err
 	}
@@ -374,7 +423,7 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, syncdb *sync.DB, mailbo
 	errchan := make(chan error, 1)
 
 	go func() {
-		if err := c.UidFetch(seqSet, items, messages); err != nil {
+		if err := h.client.UidFetch(seqSet, items, messages); err != nil {
 			errchan <- err
 		}
 	}()
@@ -417,7 +466,7 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, syncdb *sync.DB, mailbo
 	progress := progressbar.NewOptions(len(uidList), progressbar.OptionSetDescription(mailbox))
 	for _, uid := range uidList {
 		progress.Add(1)
-		err = h.getMessage(c, syncdb, mailbox, uid)
+		err = h.getMessage(syncdb, mailbox, uid)
 		if err != nil {
 			return err
 		}
@@ -426,7 +475,7 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, syncdb *sync.DB, mailbo
 	return nil
 }
 
-func (h *Handler) listFolders(c *client.Client) ([]string, error) {
+func (h *Handler) listFolders() ([]string, error) {
 
 	includeAll := false
 	// If no specific folders are listed to be included, assume all folders should be included
@@ -449,7 +498,7 @@ func (h *Handler) listFolders(c *client.Client) ([]string, error) {
 	mboxChan := make(chan *imap.MailboxInfo, 10)
 	errChan := make(chan error, 1)
 	go func() {
-		if err := c.List("", "*", mboxChan); err != nil {
+		if err := h.client.List("", "*", mboxChan); err != nil {
 			errChan <- err
 		}
 	}()
@@ -495,60 +544,15 @@ func (h *Handler) listFolders(c *client.Client) ([]string, error) {
 
 // CheckMessages checks for new/unindexed messages on the server
 func (h *Handler) CheckMessages(syncdb *sync.DB) error {
-	var c *client.Client
 	var err error
 
-	if h.mailbox.Server == "" {
-		return errors.New("imap server address not configured")
-	}
-	if h.mailbox.Username == "" {
-		return errors.New("imap username not configured")
-	}
-	if h.mailbox.Password == "" {
-		return errors.New("imap password not configured")
-	}
-
-	// Set default port
-	if h.mailbox.Port == 0 {
-		h.mailbox.Port = 143
-		if h.mailbox.UseTLS {
-			h.mailbox.Port = 993
-		}
-	}
-
-	connectionString := fmt.Sprintf("%s:%d", h.mailbox.Server, h.mailbox.Port)
-	tlsConfig := &tls.Config{ServerName: h.mailbox.Server}
-	if h.mailbox.UseTLS {
-		c, err = client.DialTLS(connectionString, tlsConfig)
-	} else {
-		c, err = client.Dial(connectionString)
-	}
-
-	if err != nil {
-		return err
-	}
-	// Don't forget to logout
-	defer c.Logout()
-
-	// Start a TLS session
-	if h.mailbox.UseStartTLS {
-		if err = c.StartTLS(tlsConfig); err != nil {
-			return err
-		}
-	}
-
-	err = c.Login(h.mailbox.Username, h.mailbox.Password)
-	if err != nil {
-		return err
-	}
-
-	mailboxes, err := h.listFolders(c)
+	mailboxes, err := h.listFolders()
 	if err != nil {
 		return err
 	}
 
 	for _, mb := range mailboxes {
-		err = h.mailboxFetchMessages(c, syncdb, mb)
+		err = h.mailboxFetchMessages(syncdb, mb)
 		if err != nil {
 			return err
 		}
