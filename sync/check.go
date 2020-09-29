@@ -117,7 +117,7 @@ func (db *DB) checkMailbox(ctx context.Context, mailboxPath string, folderName s
 				return err
 			}
 
-			info, err := db.CheckTags(ctx, messageID, taglist)
+			info, err := db.CheckTags(ctx, folderName, messageID, taglist)
 			if err != nil {
 				return err
 			}

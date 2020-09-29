@@ -25,8 +25,9 @@ type MessageInfo struct {
 	Created     bool     // If set to true, we haven't got this message in the database yet
 }
 
-func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []string) (info MessageInfo, err error) {
+func (db *DB) CheckTags(ctx context.Context, folderName string, messageid string, currentTags []string) (info MessageInfo, err error) {
 	var tags string
+	info.FolderName = folderName
 	info.MessageID = messageid
 	info.WantedTags = currentTags
 

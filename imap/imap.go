@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-imap"
+	uidplus "github.com/emersion/go-imap-uidplus"
 	"github.com/emersion/go-imap/client"
 	"github.com/schollz/progressbar/v3"
 	"github.com/yzzyx/nm-imap-sync/config"
@@ -37,6 +38,11 @@ type IndexUpdate struct {
 	Tags      []string // Tags to add/remove from message (entries prefixed with "-" will be removed)
 }
 
+type Client struct {
+	*client.Client
+	*uidplus.UidPlusClient
+}
+
 // Handler is responsible for reading from mailboxes and updating the notmuch index
 // Note that a single handler can only read from one mailbox
 type Handler struct {
@@ -44,7 +50,7 @@ type Handler struct {
 	mailbox     config.Mailbox
 
 	cfg    mailConfig
-	client *client.Client
+	client *Client
 
 	// Used internally to generate maildir files
 	seqNumChan <-chan int
@@ -83,14 +89,20 @@ func New(maildirPath string, mailbox config.Mailbox) (*Handler, error) {
 
 	connectionString := fmt.Sprintf("%s:%d", h.mailbox.Server, h.mailbox.Port)
 	tlsConfig := &tls.Config{ServerName: h.mailbox.Server}
+	var c *client.Client
 	if h.mailbox.UseTLS {
-		h.client, err = client.DialTLS(connectionString, tlsConfig)
+		c, err = client.DialTLS(connectionString, tlsConfig)
 	} else {
-		h.client, err = client.Dial(connectionString)
+		c, err = client.Dial(connectionString)
 	}
 
 	if err != nil {
 		return nil, err
+	}
+
+	h.client = &Client{
+		c,
+		uidplus.NewClient(c),
 	}
 
 	// Start a TLS session

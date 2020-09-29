@@ -3,6 +3,8 @@ package imap
 import (
 	"errors"
 	"fmt"
+	"os"
+	"time"
 
 	"github.com/emersion/go-imap"
 	"github.com/yzzyx/nm-imap-sync/sync"
@@ -11,7 +13,7 @@ import (
 // Update will add or remove flags to messages according to msgUpdate
 func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 	if msgUpdate.Created {
-		return h.createMessage(msgUpdate)
+		return h.createMessage(syncdb, msgUpdate)
 	}
 
 	// Check if we actually have to do anything
@@ -72,6 +74,39 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 	return err
 }
 
-func (h *Handler) createMessage(msgUpdate sync.Update) error {
-	return errors.New("create not supported")
+func (h *Handler) createMessage(syncdb *sync.DB, msgUpdate sync.Update) error {
+
+	fd, err := os.Open(msgUpdate.Filename)
+	if err != nil {
+		return err
+	}
+	defer fd.Close()
+
+	hasUIDPlus, err := h.client.SupportUidPlus()
+	if err != nil {
+		return err
+	}
+
+	if !hasUIDPlus {
+		return errors.New("server does not support UIDPLUS, which is currently required for pushing new messages to server")
+	}
+
+	uidValidity, uid, err := h.client.UidPlusClient.Append(msgUpdate.FolderName, msgUpdate.AddedTags, time.Now(), &FileLiteral{fd})
+	if err != nil {
+		return err
+	}
+
+	// Servers are not forced to return UID.
+	// If we didn't get it, we won't add the message back to our db,
+	// and pick it up when we sync back.
+	// Note that this requires that we have a message id to match on.
+	if uidValidity == 0 || uid == 0 {
+		return nil
+	}
+
+	// Write updated info back to database
+	msgUpdate.UIDValidity = int(uidValidity)
+	msgUpdate.UID = int(uid)
+	err = syncdb.AddMessageSyncInfo(msgUpdate.MessageInfo, msgUpdate.AddedTags)
+	return err
 }
