@@ -100,6 +100,11 @@ func (db *DB) checkMailbox(ctx context.Context, mailboxPath string, folderName s
 			taglist := []string{}
 			tag := &notmuch.Tag{}
 			for tags.Next(&tag) {
+				// The attachment tag is special, since its set based on the contents of the email.
+				// It can therefore not be added or removed during sync
+				if tag.Value == "attachment" {
+					continue
+				}
 				taglist = append(taglist, tag.Value)
 			}
 			err = tags.Close()
