@@ -19,14 +19,16 @@ type MessageInfo struct {
 	UIDValidity int
 	UID         int
 
-	AddedTags   []string
-	RemovedTags []string
-	Created     bool
+	AddedTags   []string // AddedTags lists the flags to be added on the other side
+	RemovedTags []string // RemovedTags lists the flags to be removed from the other side
+	WantedTags  []string // WantedTags is the list of tags that we'll have after we've applied the changes
+	Created     bool     // If set to true, we haven't got this message in the database yet
 }
 
 func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []string) (info MessageInfo, err error) {
 	var tags string
 	info.MessageID = messageid
+	info.WantedTags = currentTags
 
 	err = db.db.QueryRowContext(ctx, "SELECT tags, foldername, uidvalidity, uid FROM messages WHERE messageid = ?", messageid).
 		Scan(&tags, &info.FolderName, &info.UIDValidity, &info.UID)
@@ -42,10 +44,19 @@ func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []str
 	dbMap := map[string]struct{}{}
 	dbTags := strings.Split(tags, ",")
 	for _, t := range dbTags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
 		dbMap[t] = struct{}{}
 	}
 
 	for _, t := range currentTags {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+
 		if _, ok := dbMap[t]; ok {
 			delete(dbMap, t)
 			continue
@@ -54,6 +65,9 @@ func (db *DB) CheckTags(ctx context.Context, messageid string, currentTags []str
 	}
 
 	for t := range dbMap {
+		if t == "" {
+			continue
+		}
 		info.RemovedTags = append(info.RemovedTags, t)
 	}
 

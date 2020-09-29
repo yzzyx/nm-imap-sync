@@ -17,6 +17,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/schollz/progressbar/v3"
 	"github.com/yzzyx/nm-imap-sync/config"
 	"github.com/yzzyx/nm-imap-sync/imap"
 	"github.com/yzzyx/nm-imap-sync/sync"
@@ -161,19 +162,27 @@ func main() {
 			close(imapQueue)
 		}()
 
-		for x := range imapQueue {
-			fmt.Printf("%s\n", x.MessageID)
-			fmt.Printf(" Folder: %s\n", x.FolderName)
-			fmt.Printf(" Tags: add %v, remove %v\n", x.AddedTags, x.RemovedTags)
-		}
-
 		h, err := imap.New(folderPath, mailbox)
 		if err != nil {
 			log.Fatal(err)
 		}
-		defer h.Close()
+
+		progress := progressbar.NewOptions(-1, progressbar.OptionSetDescription(("updating server flags")))
+		for msgUpdate := range imapQueue {
+			progress.Add(1)
+			err = h.Update(syncdb, msgUpdate)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+		progress.Finish()
 
 		err = h.CheckMessages(syncdb)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = h.Close()
 		if err != nil {
 			log.Fatal(err)
 		}
