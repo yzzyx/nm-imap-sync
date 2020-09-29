@@ -289,6 +289,16 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 		messageID = m.ID()
 
 		for f := range imapFlags {
+			ignoreTag := false
+			for _, ignore := range h.mailbox.IgnoredTags {
+				if f == ignore {
+					ignoreTag = true
+				}
+			}
+			if ignoreTag {
+				continue
+			}
+
 			err = m.AddTag(f)
 			if err != nil {
 				return err

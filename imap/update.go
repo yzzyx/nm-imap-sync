@@ -46,6 +46,16 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 		// UidStore / Store expects a list of interface{}, it can't handle []string
 		tags := make([]interface{}, 0, len(update.tags))
 		for _, v := range update.tags {
+			ignoreTag := false
+			for _, ignore := range h.mailbox.IgnoredTags {
+				if v == ignore {
+					ignoreTag = true
+				}
+			}
+			if ignoreTag {
+				continue
+			}
+
 			tags = append(tags, v)
 		}
 

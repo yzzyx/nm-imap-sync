@@ -13,7 +13,10 @@ type Mailbox struct {
 		Exclude []string
 	}
 
-	FolderTags map[string]string `yaml:"folder_tags"`
+	// This is a list of flags that should not be synchronized  between client and server.
+	// I.e. when fetching messages from an Exchange 2010 server we usually want to ignore $MDNSent
+	IgnoredTags []string          `yaml:"ignored_tags"`
+	FolderTags  map[string]string `yaml:"folder_tags"`
 
 	DBPath string // This is usually inherited from the base configuration
 }

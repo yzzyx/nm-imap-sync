@@ -6,6 +6,9 @@ mailboxes:
     password: my-secret-password
     use_tls: true
     user_starttls: false
+    ignored_tags:
+      # This is a list of tags that should not be syncronized, i.e $MDNSent from an Exhange server
+      - "$MDNSent"
     folders:
       # Either specify folders to be included, or folders to be excluded:
       # Default is to include all folders
