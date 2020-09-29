@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/schollz/progressbar/v3"
 	"io"
 	"io/ioutil"
 	"math"
@@ -413,9 +414,9 @@ func (h *Handler) mailboxFetchMessages(c *client.Client, syncdb *sync.DB, mailbo
 	default:
 	}
 
-	for idx, uid := range uidList {
-		percent := (float32(idx) / float32(len(uidList))) * 100
-		fmt.Printf("\r%s %d/%d %.2f%%", mailbox, idx, len(uidList), percent)
+	progress := progressbar.NewOptions(len(uidList), progressbar.OptionSetDescription(mailbox))
+	for _, uid := range uidList {
+		progress.Add(1)
 		err = h.getMessage(c, syncdb, mailbox, uid)
 		if err != nil {
 			return err
