@@ -37,15 +37,11 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 	}
 
 	for _, update := range updateList {
-		if len(update.tags) == 0 {
-			continue
-		}
-		seqSet := new(imap.SeqSet)
-		seqSet.AddNum(uint32(msgUpdate.UID))
-
 		// UidStore / Store expects a list of interface{}, it can't handle []string
 		tags := make([]interface{}, 0, len(update.tags))
 		for _, v := range update.tags {
+
+			// Ignored tags will not be added or removed from the server
 			ignoreTag := false
 			for _, ignore := range h.mailbox.IgnoredTags {
 				if v == ignore {
@@ -58,6 +54,12 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 
 			tags = append(tags, v)
 		}
+
+		if len(tags) == 0 {
+			continue
+		}
+		seqSet := new(imap.SeqSet)
+		seqSet.AddNum(uint32(msgUpdate.UID))
 
 		err := h.client.UidStore(seqSet, update.item, tags, nil)
 		if err != nil {

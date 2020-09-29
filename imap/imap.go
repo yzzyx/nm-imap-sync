@@ -263,6 +263,15 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 			if flag[0] == '\\' {
 				continue
 			}
+			ignoreTag := false
+			for _, ignore := range h.mailbox.IgnoredTags {
+				if flag == ignore {
+					ignoreTag = true
+				}
+			}
+			if ignoreTag {
+				continue
+			}
 			imapFlags[flag] = true
 		}
 	}
@@ -289,16 +298,6 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 		messageID = m.ID()
 
 		for f := range imapFlags {
-			ignoreTag := false
-			for _, ignore := range h.mailbox.IgnoredTags {
-				if f == ignore {
-					ignoreTag = true
-				}
-			}
-			if ignoreTag {
-				continue
-			}
-
 			err = m.AddTag(f)
 			if err != nil {
 				return err
