@@ -4,6 +4,7 @@
 package imap
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -274,7 +275,7 @@ func (h *Handler) listFolders() ([]string, error) {
 // CheckMessages checks for new/unindexed messages on the server
 // If 'fullScan' is set to true, we will iterate through all messages, and check for
 // any updated flags that doesn't match our current set
-func (h *Handler) CheckMessages(syncdb *sync.DB) error {
+func (h *Handler) CheckMessages(ctx context.Context, syncdb *sync.DB, fullScan bool) error {
 	var err error
 
 	mailboxes, err := h.listFolders()
@@ -283,7 +284,7 @@ func (h *Handler) CheckMessages(syncdb *sync.DB) error {
 	}
 
 	for _, mb := range mailboxes {
-		err = h.mailboxFetchMessages(syncdb, mb)
+		err = h.mailboxFetchMessages(ctx, syncdb, mb, fullScan)
 		if err != nil {
 			return err
 		}

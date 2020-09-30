@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -109,7 +110,9 @@ func main() {
 	ctx := context.Background()
 	configPath := filepath.Join(userHomeDir(), ".config", "mr")
 
+	fullScan := flag.Bool("full-scan", false, "Scan all messages on server for changes")
 	//dryRun := flag.Bool("dry-run", false, "Do not download any mail, only show which actions would be performed")
+	flag.Parse()
 
 	cfgData, err := ioutil.ReadFile("./config.yml")
 	if err != nil {
@@ -177,7 +180,7 @@ func main() {
 		}
 		progress.Finish()
 
-		err = h.CheckMessages(syncdb)
+		err = h.CheckMessages(ctx, syncdb, *fullScan)
 		if err != nil {
 			log.Fatal(err)
 		}

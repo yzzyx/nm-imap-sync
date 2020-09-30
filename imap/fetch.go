@@ -1,6 +1,7 @@
 package imap
 
 import (
+	"context"
 	"crypto/md5"
 	"errors"
 	"fmt"
@@ -188,7 +189,7 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 }
 
 // mailboxFetchMessages checks for any new messages in mailbox
-func (h *Handler) mailboxFetchMessages(syncdb *sync.DB, mailbox string) error {
+func (h *Handler) mailboxFetchMessages(ctx context.Context, syncdb *sync.DB, mailbox string, fullSync bool) error {
 	mbox, err := h.client.Select(mailbox, false)
 	if err != nil {
 		return err
@@ -201,7 +202,10 @@ func (h *Handler) mailboxFetchMessages(syncdb *sync.DB, mailbox string) error {
 	// Search for new UID's
 	seqSet := new(imap.SeqSet)
 
-	lastSeenUID := h.getLastSeenUID(mailbox)
+	lastSeenUID := uint32(0)
+	if !fullSync {
+		lastSeenUID = h.getLastSeenUID(mailbox)
+	}
 	// Note that we search from lastSeenUID to MAX, instead of
 	//   lastSeenUID to '*', because the latter always returns at least one entry
 	seqSet.AddRange(lastSeenUID+1, math.MaxUint32)
@@ -218,32 +222,64 @@ func (h *Handler) mailboxFetchMessages(syncdb *sync.DB, mailbox string) error {
 		}
 	}()
 
-	var uidList []uint32
+	type Update struct {
+		UID  uint32
+		Seen bool
+		Info sync.MessageInfo
+	}
+
+	var updateList []Update
 	for msg := range messages {
 		if msg == nil {
 			// We're done
 			break
 		}
 
-		if msg.Envelope == nil {
-			return errors.New("server returned empty envelope")
+		if msg.Uid == 0 {
+			return errors.New("server did not return UID")
 		}
 
 		if msg.Uid > lastSeenUID {
 			lastSeenUID = msg.Uid
 		}
 
-		seen, err := h.seenMessage(syncdb, msg.Envelope.MessageId)
-		if err != nil {
-			return err
+		serverFlagMap, seen := h.translateFlags(msg.Flags)
+
+		update := Update{
+			UID: msg.Uid,
 		}
+
+		// The seen-flag means that it's marked as seen by the IMAP server -
+		// This flag is automatically added by the server once we download them,
+		// so if it's set it probably means that we have a brand new email on our hands,
+		// that has not been handled by any sync-client yet.
 		if seen {
-			// We've already seen this message
-			fmt.Println("Already seen", msg.Uid, msg.Envelope.MessageId)
-			continue
+			// If we've seen this message before, we just compare our flags with the
+			// flags on the server - if they differ, we'll update it later
+			serverFlags := make([]string, 0, len(serverFlagMap))
+			for flag := range serverFlagMap {
+				serverFlags = append(serverFlags, flag)
+			}
+
+			info, err := syncdb.CheckTagsUID(ctx, mailbox, int(mbox.UidValidity), int(msg.Uid), serverFlags)
+			if err != nil {
+				return err
+			}
+			info.UID = int(msg.Uid)
+			info.UIDValidity = int(mbox.UidValidity)
+			update.Info = info
+
+			if !info.Created && len(info.AddedTags) == 0 && len(info.RemovedTags) == 0 {
+				fmt.Println("No update for", msg.Uid, info.MessageID)
+				continue
+			}
+
+			if info.Created {
+				seen = false
+			}
 		}
-		//fmt.Println("Adding to list", msg.Uid, msg.Envelope.MessageId)
-		uidList = append(uidList, msg.Uid)
+		update.Seen = seen
+		updateList = append(updateList, update)
 	}
 
 	// Check if an error occurred while fetching data
@@ -253,10 +289,41 @@ func (h *Handler) mailboxFetchMessages(syncdb *sync.DB, mailbox string) error {
 	default:
 	}
 
-	progress := progressbar.NewOptions(len(uidList), progressbar.OptionSetDescription(mailbox))
-	for _, uid := range uidList {
+	progress := progressbar.NewOptions(len(updateList), progressbar.OptionSetDescription(mailbox))
+	for _, update := range updateList {
 		progress.Add(1)
-		err = h.getMessage(syncdb, mailbox, uid)
+
+		if !update.Seen || update.Info.MessageID == "" {
+			// This is the first time we've dealt with this,
+			// so we'll have to download the message and import it into notmuch
+			err = h.getMessage(syncdb, mailbox, update.UID)
+		} else {
+			// Messages that we've already seen before only needs their flags adjusted
+			err = syncdb.WrapRW(func(db *notmuch.DB) error {
+				msg, err := db.FindMessage(update.Info.MessageID)
+				if err != nil {
+					return err
+				}
+
+				for _, tag := range update.Info.AddedTags {
+					err = msg.AddTag(tag)
+					if err != nil {
+						return err
+					}
+				}
+
+				for _, tag := range update.Info.RemovedTags {
+					err = msg.RemoveTag(tag)
+					if err != nil {
+						return err
+					}
+				}
+
+				err = syncdb.AddMessageSyncInfo(update.Info, update.Info.WantedTags)
+				return err
+			})
+		}
+
 		if err != nil {
 			return err
 		}
