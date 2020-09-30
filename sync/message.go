@@ -36,7 +36,7 @@ func (db *DB) CheckTagsUID(ctx context.Context, folderName string, uidValidity i
 	info.WantedTags = wantedTags
 
 	err = db.db.QueryRowContext(ctx, query, folderName, uidValidity, uid).
-		Scan(&tags, &info.FolderName, &info.MessageID)
+		Scan(&tags, &info.MessageID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			info.Created = true
