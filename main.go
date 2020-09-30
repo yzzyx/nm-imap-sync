@@ -160,34 +160,39 @@ func main() {
 		go func() {
 			err = syncdb.CheckFolders(ctx, mailbox, folderPath, imapQueue)
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("cannot check folders for new tags: %v\n", err)
+				return
 			}
 			close(imapQueue)
 		}()
 
 		h, err := imap.New(folderPath, mailbox)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("cannot initalize new imap connection: %v\n", err)
+			return
 		}
 
-		progress := progressbar.NewOptions(-1, progressbar.OptionSetDescription(("updating server flags")))
+		progress := progressbar.NewOptions(-1, progressbar.OptionSetDescription("updating server flags"))
 		for msgUpdate := range imapQueue {
 			progress.Add(1)
 			err = h.Update(syncdb, msgUpdate)
 			if err != nil {
-				log.Fatal(err)
+				log.Printf("cannot update message on server: %v\n", err)
+				return
 			}
 		}
 		progress.Finish()
 
 		err = h.CheckMessages(ctx, syncdb, *fullScan)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("cannot check for new messages on server: %v\n", err)
+			return
 		}
 
 		err = h.Close()
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("Cannot close imap handler: %v", err)
+			return
 		}
 	}
 
