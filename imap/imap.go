@@ -107,6 +107,11 @@ func New(maildirPath string, mailbox config.Mailbox) (*Handler, error) {
 		}
 	}
 
+	err = h.client.Login(h.mailbox.Username, h.mailbox.Password)
+	if err != nil {
+		return nil, err
+	}
+
 	// Generate unique sequence numbers
 	seqNumChan := make(chan int)
 	go func() {
