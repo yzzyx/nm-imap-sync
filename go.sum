@@ -25,6 +25,8 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/zenhack/go.notmuch v0.0.0-20190821052706-5a1961965cfb h1:eZBIw4TilXSAEYcWKf51bERhwH431YwntDYus0Bgxh0=
 github.com/zenhack/go.notmuch v0.0.0-20190821052706-5a1961965cfb/go.mod h1:zJtFvR3NinVdmBiLyB4MyXKmqyVfZEb2cK97ISfTgV8=
+github.com/zenhack/go.notmuch v0.0.0-20200930180226-732f6524c33d h1:exM4wdEiCu8bz3arJmh6TZmOp/7RtKZTOkvRT5J2OQg=
+github.com/zenhack/go.notmuch v0.0.0-20200930180226-732f6524c33d/go.mod h1:zJtFvR3NinVdmBiLyB4MyXKmqyVfZEb2cK97ISfTgV8=
 golang.org/x/sys v0.0.0-20200116001909-b77594299b42/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20200615200032-f1bc736245b1/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/text v0.3.2 h1:tW2bmiBqwgJj/UpqtC8EpXEZVYOwU0yG4iWbprSVAcs=

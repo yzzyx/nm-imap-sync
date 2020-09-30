@@ -114,11 +114,7 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 	err = syncdb.WrapRW(func(db *notmuch.DB) error {
 		// Add file to index
 		m, err := db.AddMessage(newPath)
-		if err != nil {
-			if errors.Is(err, notmuch.ErrDuplicateMessageID) {
-				// We've already seen this one
-				return nil
-			}
+		if err != nil && !errors.Is(err, notmuch.ErrDuplicateMessageID) {
 			return err
 		}
 		defer m.Close()
@@ -126,6 +122,11 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 		// Read the message id from notmuch, since it's possible
 		// we had to generate one
 		messageID = m.ID()
+
+		if errors.Is(err, notmuch.ErrDuplicateMessageID) {
+			// If this is a duplicate message, we return here and update our index
+			return nil
+		}
 
 		for f := range imapFlags {
 			err = m.AddTag(f)
