@@ -102,41 +102,8 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 		'R'     Adds the "replied" tag to the message
 		'S'     Removes the "unread" tag from the message
 	*/
-	seen := false
-	imapFlags := map[string]bool{}
 
-	// Add flags from imap
-	for _, flag := range msg.Flags {
-		switch flag {
-		case imap.SeenFlag:
-			seen = true
-		case imap.AnsweredFlag:
-			imapFlags["replied"] = true
-		case imap.DeletedFlag:
-			// NOTE - the deleted flag is special in IMAP
-			// usually, all deleted messages will be permanently removed from the server when we close the folder
-			imapFlags["deleted"] = true
-		case imap.DraftFlag:
-			imapFlags["draft"] = true
-		case imap.FlaggedFlag:
-			imapFlags["flagged"] = true
-		default:
-			// We ignore other builtin flags
-			if flag[0] == '\\' {
-				continue
-			}
-			ignoreTag := false
-			for _, ignore := range h.mailbox.IgnoredTags {
-				if flag == ignore {
-					ignoreTag = true
-				}
-			}
-			if ignoreTag {
-				continue
-			}
-			imapFlags[flag] = true
-		}
-	}
+	imapFlags, seen := h.translateFlags(msg.Flags)
 
 	if !seen {
 		imapFlags["unread"] = true
