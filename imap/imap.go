@@ -284,10 +284,46 @@ func (h *Handler) CheckMessages(ctx context.Context, syncdb *sync.DB, fullScan b
 	}
 
 	for _, mb := range mailboxes {
+		err = createMailDir(filepath.Join(h.maildirPath, mb))
+		if err != nil {
+			return err
+		}
+
 		err = h.mailboxFetchMessages(ctx, syncdb, mb, fullScan)
 		if err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// createMailDir creates new directories to store maildir entries in
+// with the correct subfolders and permissions
+func createMailDir(mailboxPath string) error {
+	if st, err := os.Stat(mailboxPath); err == nil {
+		if !st.IsDir() {
+			return fmt.Errorf("path %s is not a directory", mailboxPath)
+		}
+		// Path exists and is a directory, so we're done
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	err := os.MkdirAll(filepath.Join(mailboxPath, "tmp"), 0700)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(filepath.Join(mailboxPath, "cur"), 0700)
+	if err != nil {
+		return err
+	}
+
+	err = os.MkdirAll(filepath.Join(mailboxPath, "new"), 0700)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

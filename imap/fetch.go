@@ -60,16 +60,6 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 	mailboxPath := filepath.Join(h.maildirPath, mailbox)
 	tmpPath := filepath.Join(mailboxPath, "tmp", tmpFilename)
 
-	err = os.MkdirAll(filepath.Join(mailboxPath, "tmp"), 0700)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(filepath.Join(mailboxPath, "cur"), 0700)
-	if err != nil {
-		return err
-	}
-
 	fd, err := os.Create(tmpPath)
 	if err != nil {
 		return err
