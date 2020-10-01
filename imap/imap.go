@@ -4,42 +4,23 @@
 package imap
 
 import (
-	"crypto/md5"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/yzzyx/nm-imap-sync/nm"
-	"io"
 	"io/ioutil"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/emersion/go-imap"
+	uidplus "github.com/emersion/go-imap-uidplus"
 	"github.com/emersion/go-imap/client"
+	"github.com/yzzyx/nm-imap-sync/config"
+	"github.com/yzzyx/nm-imap-sync/sync"
 	notmuch "github.com/zenhack/go.notmuch"
 )
-
-// Mailbox defines the available options for a IMAP mailbox to pull from
-type Mailbox struct {
-	Server      string
-	Port        int
-	Username    string
-	Password    string
-	UseTLS      bool `yaml:"use_tls"`
-	UseStartTLS bool `yaml:"use_starttls"`
-	Folders     struct {
-		Include []string
-		Exclude []string
-	}
-
-	FolderTags map[string]string `yaml:"folder_tags"`
-
-	DBPath string // This is usually inherited from the base configuration
-}
 
 type mailConfig struct {
 	// Keep track of last seen UID for each mailbox
@@ -53,14 +34,19 @@ type IndexUpdate struct {
 	Tags      []string // Tags to add/remove from message (entries prefixed with "-" will be removed)
 }
 
+type Client struct {
+	*client.Client
+	*uidplus.UidPlusClient
+}
+
 // Handler is responsible for reading from mailboxes and updating the notmuch index
 // Note that a single handler can only read from one mailbox
 type Handler struct {
-	db          *nm.DB
 	maildirPath string
-	mailbox     Mailbox
+	mailbox     config.Mailbox
 
-	cfg mailConfig
+	cfg    mailConfig
+	client *Client
 
 	// Used internally to generate maildir files
 	seqNumChan <-chan int
@@ -69,7 +55,7 @@ type Handler struct {
 }
 
 // New creates a new Handler for processing IMAP mailboxes
-func New(maildirPath string, mailbox Mailbox) (*Handler, error) {
+func New(maildirPath string, mailbox config.Mailbox) (*Handler, error) {
 	var err error
 	h := Handler{}
 	h.hostname, err = os.Hostname()
@@ -78,6 +64,54 @@ func New(maildirPath string, mailbox Mailbox) (*Handler, error) {
 	}
 
 	h.mailbox = mailbox
+
+	if h.mailbox.Server == "" {
+		return nil, errors.New("imap server address not configured")
+	}
+	if h.mailbox.Username == "" {
+		return nil, errors.New("imap username not configured")
+	}
+	if h.mailbox.Password == "" {
+		return nil, errors.New("imap password not configured")
+	}
+
+	// Set default port
+	if h.mailbox.Port == 0 {
+		h.mailbox.Port = 143
+		if h.mailbox.UseTLS {
+			h.mailbox.Port = 993
+		}
+	}
+
+	connectionString := fmt.Sprintf("%s:%d", h.mailbox.Server, h.mailbox.Port)
+	tlsConfig := &tls.Config{ServerName: h.mailbox.Server}
+	var c *client.Client
+	if h.mailbox.UseTLS {
+		c, err = client.DialTLS(connectionString, tlsConfig)
+	} else {
+		c, err = client.Dial(connectionString)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	h.client = &Client{
+		c,
+		uidplus.NewClient(c),
+	}
+
+	// Start a TLS session
+	if h.mailbox.UseStartTLS {
+		if err = h.client.StartTLS(tlsConfig); err != nil {
+			return nil, err
+		}
+	}
+
+	err = h.client.Login(h.mailbox.Username, h.mailbox.Password)
+	if err != nil {
+		return nil, err
+	}
 
 	// Generate unique sequence numbers
 	seqNumChan := make(chan int)
@@ -90,11 +124,6 @@ func New(maildirPath string, mailbox Mailbox) (*Handler, error) {
 	}()
 	h.seqNumChan = seqNumChan
 	h.processID = os.Getpid()
-	h.db, err = nm.New(mailbox.DBPath)
-	if err != nil {
-		return nil, err
-	}
-
 	h.maildirPath = maildirPath
 
 	h.cfg.LastSeenUID = make(map[string]uint32)
@@ -125,159 +154,12 @@ func (h *Handler) Close() error {
 		return err
 	}
 
-	return nil
-}
-
-// getMessage downloads a message from the server from a mailbox, and stores it in a maildir
-func (h *Handler) getMessage(c *client.Client, mailbox string, uid uint32) error {
-	// Select INBOX
-	_, err := c.Select(mailbox, false)
+	err = h.client.Close()
 	if err != nil {
 		return err
 	}
 
-	// Download whole body
-	section := &imap.BodySectionName{
-		Peek: true, // Do not update seen-flags
-	}
-	items := []imap.FetchItem{section.FetchItem(), imap.FetchFlags}
-	seqSet := new(imap.SeqSet)
-	seqSet.AddNum(uid)
-
-	messages := make(chan *imap.Message)
-	done := make(chan error)
-	go func() {
-		done <- c.UidFetch(seqSet, items, messages)
-	}()
-
-	msg := <-messages
-	if msg == nil {
-		return errors.New("Server didn't return message")
-	}
-
-	r := msg.GetBody(section)
-	if r == nil {
-		return errors.New("Server didn't return message body")
-	}
-
-	err = <-done
-	if err != nil {
-		return err
-	}
-
-	md5hash := md5.New()
-	tmpFilename := fmt.Sprintf("%d_%d.%d.%s,U=%d", time.Now().Unix(), <-h.seqNumChan, h.processID, h.hostname, uid)
-	mailboxPath := filepath.Join(h.maildirPath, mailbox)
-	tmpPath := filepath.Join(mailboxPath, "tmp", tmpFilename)
-
-	err = os.MkdirAll(filepath.Join(mailboxPath, "tmp"), 0700)
-	if err != nil {
-		return err
-	}
-
-	err = os.MkdirAll(filepath.Join(mailboxPath, "cur"), 0700)
-	if err != nil {
-		return err
-	}
-
-	fd, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
-
-	multiwriter := io.MultiWriter(fd, md5hash)
-	_, err = io.Copy(multiwriter, r)
-	if err != nil {
-		// Perform cleanup
-		_ = fd.Close()
-		_ = os.Remove(tmpPath)
-		return err
-	}
-	_ = fd.Close()
-
-	sum := fmt.Sprintf("%x", md5hash.Sum(nil))
-	newFilename := fmt.Sprintf("%s,FMD5=%s", tmpFilename, sum)
-	newPath := filepath.Join(mailboxPath, "cur", newFilename)
-	err = os.Rename(tmpPath, newPath)
-	if err != nil {
-		// Could not rename file - discard old entry to avoid duplicates
-		_ = os.Remove(tmpPath)
-		return err
-	}
-
-
-	seen := false
-	answered := false
-	deleted := false
-
-	// Add flags from imap
-	for _, flag := range msg.Flags {
-		switch flag {
-		case imap.SeenFlag:
-			seen = true
-		case imap.AnsweredFlag:
-			answered = true
-		case imap.DeletedFlag:
-			deleted = true
-		}
-	}
-
-	err = h.db.WrapRW(func (db *notmuch.DB) error {
-		// Add file to index
-		m, err := db.AddMessage(newPath)
-		if err != nil {
-			if errors.Is(err, notmuch.ErrDuplicateMessageID) {
-				// We've already seen this one
-				return nil
-			}
-			return err
-		}
-		defer m.Close()
-
-		if !seen {
-			err = m.AddTag("unread")
-			if err != nil {
-				return err
-			}
-		}
-
-		if answered {
-			err = m.AddTag("replied")
-			if err != nil {
-				return err
-			}
-		}
-
-		if deleted {
-			err = m.AddTag("deleted")
-			if err != nil {
-				return err
-			}
-		}
-
-		// Add all messages to inbox
-		err = m.AddTag("inbox")
-		if err != nil {
-			return err
-		}
-
-		// Add additional tags specified in config file
-		if extraTags, ok := h.mailbox.FolderTags[mailbox]; ok {
-			for _, tag := range strings.Split(extraTags, ",") {
-				tag = strings.TrimSpace(tag)
-				if strings.HasPrefix(tag, "-") {
-					err = m.RemoveTag(tag[1:])
-				} else {
-					err = m.AddTag(tag)
-				}
-
-				if err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
+	err = h.client.Logout()
 	return err
 }
 
@@ -294,7 +176,7 @@ func (h *Handler) setLastSeenUID(mailbox string, uid uint32) {
 }
 
 // seenMessage returns true if we've already seen this message
-func (h *Handler) seenMessage(messageID string) (bool, error) {
+func (h *Handler) seenMessage(nmdb *sync.DB, messageID string) (bool, error) {
 	// Remove surrounding tags
 	if (strings.HasPrefix(messageID, "<") && strings.HasSuffix(messageID, ">")) ||
 		(strings.HasPrefix(messageID, "\"") && strings.HasSuffix(messageID, "\"")) {
@@ -307,7 +189,7 @@ func (h *Handler) seenMessage(messageID string) (bool, error) {
 	}
 
 	retval := false
-	err := h.db.Wrap(func(db *notmuch.DB) error {
+	err := nmdb.Wrap(func(db *notmuch.DB) error {
 		msg, err := db.FindMessage(messageID)
 		if err == nil {
 			msg.Close()
@@ -323,83 +205,7 @@ func (h *Handler) seenMessage(messageID string) (bool, error) {
 	return retval, err
 }
 
-func (h *Handler) mailboxFetchMessages(c *client.Client, mailbox string) error {
-	mbox, err := c.Select(mailbox, false)
-	if err != nil {
-		return err
-	}
-
-	if mbox.Messages == 0 {
-		return nil
-	}
-
-	// Search for new UID's
-	seqSet := new(imap.SeqSet)
-	lastSeenUID := h.getLastSeenUID(mailbox)
-	// Note that we search from lastSeenUID to MAX, instead of
-	//   lastSeenUID to '*', because the latter always returns at least one entry
-	seqSet.AddRange(lastSeenUID+1, math.MaxUint32)
-
-	// Fetch envelope information (contains messageid, and UID, which we'll use to fetch the body
-	items := []imap.FetchItem{imap.FetchEnvelope, imap.FetchUid}
-
-	messages := make(chan *imap.Message, 100)
-	errchan := make(chan error, 1)
-
-	go func() {
-		if err := c.UidFetch(seqSet, items, messages); err != nil {
-			errchan <- err
-		}
-	}()
-
-	var uidList []uint32
-	for msg := range messages {
-		if msg == nil {
-			// We're done
-			break
-		}
-
-		if msg.Envelope == nil {
-			return errors.New("server returned empty envelope")
-		}
-
-		if msg.Uid > lastSeenUID {
-			lastSeenUID = msg.Uid
-		}
-
-		seen, err := h.seenMessage(msg.Envelope.MessageId)
-		if err != nil {
-			return err
-		}
-		if seen {
-			// We've already seen this message
-			fmt.Println("Already seen", msg.Uid, msg.Envelope.MessageId)
-			continue
-		}
-		//fmt.Println("Adding to list", msg.Uid, msg.Envelope.MessageId)
-		uidList = append(uidList, msg.Uid)
-	}
-
-	// Check if an error occurred while fetching data
-	select {
-	case err := <-errchan:
-		return err
-	default:
-	}
-
-	for idx, uid := range uidList {
-		percent := (float32(idx) / float32(len(uidList))) * 100
-		fmt.Printf("\r%s %d/%d %.2f%%", mailbox, idx, len(uidList), percent)
-		err = h.getMessage(c, mailbox, uid)
-		if err != nil {
-			return err
-		}
-	}
-	h.setLastSeenUID(mailbox, lastSeenUID)
-	return nil
-}
-
-func (h *Handler) listFolders(c *client.Client) ([]string, error) {
+func (h *Handler) listFolders() ([]string, error) {
 
 	includeAll := false
 	// If no specific folders are listed to be included, assume all folders should be included
@@ -422,7 +228,7 @@ func (h *Handler) listFolders(c *client.Client) ([]string, error) {
 	mboxChan := make(chan *imap.MailboxInfo, 10)
 	errChan := make(chan error, 1)
 	go func() {
-		if err := c.List("", "*", mboxChan); err != nil {
+		if err := h.client.List("", "*", mboxChan); err != nil {
 			errChan <- err
 		}
 	}()
@@ -467,58 +273,18 @@ func (h *Handler) listFolders(c *client.Client) ([]string, error) {
 }
 
 // CheckMessages checks for new/unindexed messages on the server
-func (h *Handler) CheckMessages() error {
-	var c *client.Client
+// If 'fullScan' is set to true, we will iterate through all messages, and check for
+// any updated flags that doesn't match our current set
+func (h *Handler) CheckMessages(ctx context.Context, syncdb *sync.DB, fullScan bool) error {
 	var err error
 
-	if h.mailbox.Server == "" {
-		return errors.New("imap server address not configured")
-	}
-	if h.mailbox.Username == "" {
-		return errors.New("imap username not configured")
-	}
-	if h.mailbox.Password == "" {
-		return errors.New("imap password not configured")
-	}
-
-	// Set default port
-	if h.mailbox.Port == 0 {
-		h.mailbox.Port = 143
-		if h.mailbox.UseTLS {
-			h.mailbox.Port = 993
-		}
-	}
-
-	connectionString := fmt.Sprintf("%s:%d", h.mailbox.Server, h.mailbox.Port)
-	tlsConfig := &tls.Config{ServerName: h.mailbox.Server}
-	if h.mailbox.UseTLS {
-		c, err = client.DialTLS(connectionString, tlsConfig)
-	} else {
-		c, err = client.Dial(connectionString)
-	}
-
+	mailboxes, err := h.listFolders()
 	if err != nil {
 		return err
 	}
 
-	// Don't forget to logout
-	defer c.Logout()
-
-	// Start a TLS session
-	if h.mailbox.UseStartTLS {
-		if err := c.StartTLS(tlsConfig); err != nil {
-			return err
-		}
-	}
-
-	err = c.Login(h.mailbox.Username, h.mailbox.Password)
-	if err != nil {
-		return err
-	}
-
-	mailboxes, err := h.listFolders(c)
 	for _, mb := range mailboxes {
-		err = h.mailboxFetchMessages(c, mb)
+		err = h.mailboxFetchMessages(ctx, syncdb, mb, fullScan)
 		if err != nil {
 			return err
 		}

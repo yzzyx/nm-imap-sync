@@ -4,7 +4,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,8 +17,11 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/schollz/progressbar/v3"
 	"github.com/yzzyx/nm-imap-sync/config"
 	"github.com/yzzyx/nm-imap-sync/imap"
+	"github.com/yzzyx/nm-imap-sync/sync"
 	notmuch "github.com/zenhack/go.notmuch"
 	"gopkg.in/yaml.v2"
 )
@@ -102,9 +107,12 @@ func parsePathSetting(inPath string) string {
 }
 
 func main() {
+	ctx := context.Background()
 	configPath := filepath.Join(userHomeDir(), ".config", "mr")
 
+	fullScan := flag.Bool("full-scan", false, "Scan all messages on server for changes")
 	//dryRun := flag.Bool("dry-run", false, "Do not download any mail, only show which actions would be performed")
+	flag.Parse()
 
 	cfgData, err := ioutil.ReadFile("./config.yml")
 	if err != nil {
@@ -125,6 +133,13 @@ func main() {
 
 	maildirPath := parsePathSetting(cfg.Maildir)
 
+	syncdb, err := sync.New(ctx, maildirPath)
+	if err != nil {
+		fmt.Printf("Cannot initialize sync database: %s\n", err)
+		os.Exit(1)
+	}
+	defer syncdb.Close()
+
 	// Create maildir if it doesnt exist
 	err = os.MkdirAll(maildirPath, 0700)
 	if err != nil {
@@ -140,15 +155,44 @@ func main() {
 			panic(err)
 		}
 
+		imapQueue := make(chan sync.Update, 10000)
+
+		go func() {
+			err = syncdb.CheckFolders(ctx, mailbox, folderPath, imapQueue)
+			if err != nil {
+				log.Printf("cannot check folders for new tags: %v\n", err)
+				return
+			}
+			close(imapQueue)
+		}()
+
 		h, err := imap.New(folderPath, mailbox)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("cannot initalize new imap connection: %v\n", err)
+			return
 		}
-		defer h.Close()
 
-		err = h.CheckMessages()
+		progress := progressbar.NewOptions(-1, progressbar.OptionSetDescription("updating server flags"))
+		for msgUpdate := range imapQueue {
+			progress.Add(1)
+			err = h.Update(syncdb, msgUpdate)
+			if err != nil {
+				log.Printf("cannot update message on server: %v\n", err)
+				return
+			}
+		}
+		progress.Finish()
+
+		err = h.CheckMessages(ctx, syncdb, *fullScan)
 		if err != nil {
-			log.Fatal(err)
+			log.Printf("cannot check for new messages on server: %v\n", err)
+			return
+		}
+
+		err = h.Close()
+		if err != nil {
+			log.Printf("Cannot close imap handler: %v", err)
+			return
 		}
 	}
 
