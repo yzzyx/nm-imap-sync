@@ -108,13 +108,19 @@ func parsePathSetting(inPath string) string {
 
 func main() {
 	ctx := context.Background()
-	configPath := filepath.Join(userHomeDir(), ".config", "mr")
+
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		cfgDir = filepath.Join(userHomeDir(), ".config")
+	}
+	configPath := filepath.Join(cfgDir, "nm-imap-sync", "config.yml")
 
 	fullScan := flag.Bool("full-scan", false, "Scan all messages on server for changes")
+	configFile := flag.String("config", configPath, "Use specific configuration file")
 	//dryRun := flag.Bool("dry-run", false, "Do not download any mail, only show which actions would be performed")
 	flag.Parse()
 
-	cfgData, err := ioutil.ReadFile("./config.yml")
+	cfgData, err := ioutil.ReadFile(*configFile)
 	if err != nil {
 		fmt.Printf("Cannot read config file '%s': %s\n", configPath, err)
 		os.Exit(1)
