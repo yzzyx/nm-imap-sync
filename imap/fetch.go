@@ -103,12 +103,7 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 		'R'     Adds the "replied" tag to the message
 		'S'     Removes the "unread" tag from the message
 	*/
-
-	imapFlags, seen := h.translateFlags(msg.Flags)
-
-	if !seen {
-		imapFlags["unread"] = true
-	}
+	imapFlags, _ := h.translateFlags(msg.Flags)
 
 	var messageID string
 	err = syncdb.WrapRW(func(db *notmuch.DB) error {

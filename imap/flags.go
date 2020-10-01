@@ -38,5 +38,9 @@ func (h *Handler) translateFlags(imapFlags []string) (outputFlags map[string]boo
 		}
 	}
 
+	if !seen {
+		outputFlags["unread"] = true
+	}
+
 	return outputFlags, seen
 }
