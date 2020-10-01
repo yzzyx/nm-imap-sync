@@ -181,10 +181,12 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 	// so we add these to our sync-db. Any additional flags will then
 	// be synchronized to the IMAP server on the next run
 	err = syncdb.AddMessageSyncInfo(sync.MessageInfo{
-		MessageID:   messageID,
-		FolderName:  mailboxInfo.Name,
-		UIDValidity: int(mailboxInfo.UidValidity),
-		UID:         int(uid),
+		MessageID: messageID,
+		UIDs: []sync.UID{{
+			FolderName:  mailboxInfo.Name,
+			UIDValidity: int(mailboxInfo.UidValidity),
+			UID:         int(uid),
+		}},
 	}, flagSlice)
 	return err
 }
@@ -266,12 +268,9 @@ func (h *Handler) mailboxFetchMessages(ctx context.Context, syncdb *sync.DB, mai
 			if err != nil {
 				return err
 			}
-			info.UID = int(msg.Uid)
-			info.UIDValidity = int(mbox.UidValidity)
 			update.Info = info
 
 			if !info.Created && len(info.AddedTags) == 0 && len(info.RemovedTags) == 0 {
-				fmt.Println("No update for", msg.Uid, info.MessageID)
 				continue
 			}
 

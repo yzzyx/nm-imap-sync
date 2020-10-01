@@ -13,7 +13,7 @@ import (
 // Update will add or remove flags to messages according to msgUpdate
 func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 	if msgUpdate.Created {
-		return h.createMessage(syncdb, msgUpdate)
+		return h.createMessage(syncdb, msgUpdate, msgUpdate.UIDs[0])
 	}
 
 	// Check if we actually have to do anything
@@ -21,13 +21,24 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 		return nil
 	}
 
-	status, err := h.client.Select(msgUpdate.FolderName, false)
+	// Update all UID's in list
+	for _, uid := range msgUpdate.UIDs {
+		err := h.updateUID(syncdb, msgUpdate, uid)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Handler) updateUID(syncdb *sync.DB, msgUpdate sync.Update, uid sync.UID) error {
+	status, err := h.client.Select(uid.FolderName, false)
 	if err != nil {
 		return err
 	}
 
-	if int(status.UidValidity) != msgUpdate.UIDValidity {
-		return fmt.Errorf("mailbox %s has new UIDValidity - currently unsupported", msgUpdate.FolderName)
+	if int(status.UidValidity) != uid.UIDValidity {
+		return fmt.Errorf("mailbox %s has new UIDValidity - currently unsupported", uid.FolderName)
 	}
 
 	updateList := []struct {
@@ -61,7 +72,7 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 			continue
 		}
 		seqSet := new(imap.SeqSet)
-		seqSet.AddNum(uint32(msgUpdate.UID))
+		seqSet.AddNum(uint32(uid.UID))
 
 		err := h.client.UidStore(seqSet, update.item, tags, nil)
 		if err != nil {
@@ -74,7 +85,7 @@ func (h *Handler) Update(syncdb *sync.DB, msgUpdate sync.Update) error {
 	return err
 }
 
-func (h *Handler) createMessage(syncdb *sync.DB, msgUpdate sync.Update) error {
+func (h *Handler) createMessage(syncdb *sync.DB, msgUpdate sync.Update, uidInfo sync.UID) error {
 
 	fd, err := os.Open(msgUpdate.Filename)
 	if err != nil {
@@ -91,7 +102,7 @@ func (h *Handler) createMessage(syncdb *sync.DB, msgUpdate sync.Update) error {
 		return errors.New("server does not support UIDPLUS, which is currently required for pushing new messages to server")
 	}
 
-	uidValidity, uid, err := h.client.UidPlusClient.Append(msgUpdate.FolderName, msgUpdate.AddedTags, time.Now(), &FileLiteral{fd})
+	uidValidity, uid, err := h.client.UidPlusClient.Append(uidInfo.FolderName, msgUpdate.AddedTags, time.Now(), &FileLiteral{fd})
 	if err != nil {
 		return err
 	}
@@ -105,8 +116,9 @@ func (h *Handler) createMessage(syncdb *sync.DB, msgUpdate sync.Update) error {
 	}
 
 	// Write updated info back to database
-	msgUpdate.UIDValidity = int(uidValidity)
-	msgUpdate.UID = int(uid)
+	uidInfo.UIDValidity = int(uidValidity)
+	uidInfo.UID = int(uid)
+	msgUpdate.MessageInfo.UIDs = []sync.UID{uidInfo}
 	err = syncdb.AddMessageSyncInfo(msgUpdate.MessageInfo, msgUpdate.AddedTags)
 	return err
 }
