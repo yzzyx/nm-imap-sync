@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+// internalTags contains a list of tags that will be silently ignored,
+// because they describe a feature of the message, and cannot be changed
+var internalTags = map[string]bool{
+	"":           true,
+	"attachment": true,
+	"signed":     true,
+}
+
 // UID is used to identify the message on the IMAP server
 // Unfortunately, there's no good way to uniquely identify a message,
 // and even though all our messages in notmuch will have a message-id,
@@ -108,7 +116,7 @@ func (db *DB) compareTags(info *MessageInfo, tags string, wantedTags []string) {
 	dbTags := strings.Split(tags, ",")
 	for _, t := range dbTags {
 		t = strings.TrimSpace(t)
-		if t == "" {
+		if internalTags[t] {
 			continue
 		}
 		dbMap[t] = struct{}{}
@@ -116,7 +124,7 @@ func (db *DB) compareTags(info *MessageInfo, tags string, wantedTags []string) {
 
 	for _, t := range wantedTags {
 		t = strings.TrimSpace(t)
-		if t == "" {
+		if internalTags[t] {
 			continue
 		}
 
@@ -128,9 +136,6 @@ func (db *DB) compareTags(info *MessageInfo, tags string, wantedTags []string) {
 	}
 
 	for t := range dbMap {
-		if t == "" {
-			continue
-		}
 		info.RemovedTags = append(info.RemovedTags, t)
 	}
 }
@@ -141,7 +146,14 @@ func (db *DB) AddMessageSyncInfo(info MessageInfo, tags []string) error {
 	query := `INSERT INTO messages(messageid, tags) VALUES(?, ?)
   ON CONFLICT(messageid) DO UPDATE SET tags=?;`
 
-	tagStr := strings.Join(tags, ",")
+	filteredTags := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if internalTags[t] {
+			continue
+		}
+		filteredTags = append(filteredTags, t)
+	}
+	tagStr := strings.Join(filteredTags, ",")
 	_, err := db.db.Exec(query, info.MessageID, tagStr, tagStr)
 	if err != nil {
 		return fmt.Errorf("cannot exec query %s: %w", query, err)
