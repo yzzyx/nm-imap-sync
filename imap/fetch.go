@@ -162,17 +162,7 @@ func (h *Handler) getMessage(syncdb *sync.DB, mailbox string, uid uint32) error 
 	for f := range imapFlags {
 		flagSlice = append(flagSlice, f)
 	}
-	// The flags in `imapFlags` already exist on the server,
-	// so we add these to our sync-db. Any additional flags will then
-	// be synchronized to the IMAP server on the next run
-	err = syncdb.AddMessageSyncInfo(sync.MessageInfo{
-		MessageID: messageID,
-		UIDs: []sync.UID{{
-			FolderName:  mailboxInfo.Name,
-			UIDValidity: int(mailboxInfo.UidValidity),
-			UID:         int(uid),
-		}},
-	}, flagSlice)
+
 	return err
 }
 
@@ -199,7 +189,7 @@ func (h *Handler) mailboxFetchMessages(ctx context.Context, syncdb *sync.DB, mai
 	seqSet.AddRange(lastSeenUID+1, math.MaxUint32)
 
 	// Fetch envelope information (contains messageid, and UID, which we'll use to fetch the body
-	items := []imap.FetchItem{imap.FetchFlags, imap.FetchUid}
+	items := []imap.FetchItem{imap.FetchUid}
 
 	messages := make(chan *imap.Message, 100)
 	errchan := make(chan error, 1)
@@ -213,7 +203,6 @@ func (h *Handler) mailboxFetchMessages(ctx context.Context, syncdb *sync.DB, mai
 	type Update struct {
 		UID  uint32
 		Seen bool
-		Info sync.MessageInfo
 	}
 
 	var updateList []Update

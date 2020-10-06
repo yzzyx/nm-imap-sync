@@ -6,6 +6,25 @@ import (
 	notmuch "github.com/zenhack/go.notmuch"
 )
 
+// DB is a structure for checking the
+// sync status of messages in a maildir,
+type DB struct {
+	dbpath string
+	nmDB   *notmuch.DB
+}
+
+// New creates a new wrapper for notmuch
+func New(dbpath string) *DB {
+	return &DB{dbpath: dbpath}
+}
+
+func (db *DB) Close() error {
+	if db.nmDB != nil {
+		return db.nmDB.Close()
+	}
+	return nil
+}
+
 // Wrap creates a readonly database connection, and executes the 'fn' function with this connection
 func (db *DB) Wrap(fn func(db *notmuch.DB) error) error {
 	return db.wrap(notmuch.DBReadOnly, fn)
@@ -17,8 +36,8 @@ func (db *DB) WrapRW(fn func(db *notmuch.DB) error) error {
 }
 
 func (db *DB) wrap(mode notmuch.DBMode, fn func(*notmuch.DB) error) error {
-	if mode == notmuch.DBReadWrite && db.nmdb != nil {
-		err := db.nmdb.Close()
+	if mode == notmuch.DBReadWrite && db.nmDB != nil {
+		err := db.nmDB.Close()
 		if err != nil {
 			return err
 		}
